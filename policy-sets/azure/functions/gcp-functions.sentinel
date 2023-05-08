@@ -1,0 +1,23 @@
+# Common functions for use with the GCP provider
+
+##### Imports #####
+import "tfplan/v2" as tfplan
+import "types"
+
+##### Functions #####
+
+find_resources_with_standard_labels = func() {
+	resources = filter tfplan.resource_changes as address, rc {
+		# GCP resources only - "provider_name" will end with the provider name
+		rc.provider_name matches "(.*)google$" and
+			# resource is being created, updated, read, no-op, and ignoring deletes
+			(rc.change.actions contains "create" or rc.change.actions contains "update" or
+				rc.change.actions contains "read" or
+				rc.change.actions contains "no-op") and
+			# resource 'labels' is null and ignoring missing 'labels' argument
+			((rc.change.after.labels is null) else false or
+				# resource 'labels' is of type map
+				types.type_of(rc.change.after.labels) is "map")
+	}
+	return resources
+}
