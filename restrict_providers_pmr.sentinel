@@ -1,0 +1,116 @@
+# Policy that references the Local Terraform Provider Registry and uses that to enforce Allowed Providers in Plans.
+# https://developer.hashicorp.com/terraform/cloud-docs/api-docs/private-registry/providers#list-terraform-registry-providers-for-an-organization
+# This policy was written at a customer request in May 2023
+
+### Import functions ###
+import "tfconfig/v2" as tfconfig
+import "tfconfig-functions" as config
+import "tfrun"
+import "http"
+import "json"
+import "strings"
+
+### Input Parameters ###
+### See docs here: https://docs.hashicorp.com/sentinel/language/parameters  ###
+param api_key 
+
+### Run Time Variables ###
+#workspace_name = tfrun.workspace.name
+organization = tfrun.organization.name
+
+### Build GET Call ###
+request = http.request("https://app.terraform.io/api/v2/organizations/" + organization + "/registry-providers/")
+request = request.with_header("Authorization", "Bearer " + api_key)
+request = request.with_header("Content-Type", "application/json")
+
+##  Create a variable from the GET response and unmarshal to use selectors on keys.  ##
+resp = json.unmarshal(http.get(request).body).data
+
+# Function to return Provider Names as list from Registry Response.
+providers = []
+for resp as _, a {
+	pro = a.attributes.name
+    append(providers, pro)
+}
+
+#Declaring providers as the allowed_list variable to reuse code below
+allowed_list = providers
+print("Allowed Providers:", allowed_list)
+
+#================================================================================#
+
+# Functions reused from policy here: https://github.com/hashicorp/terraform-guides/blob/d237805ce8d0aa15a82b9538500fb118e1f2edb3/governance/third-generation/cloud-agnostic/allowed-providers.sentinel
+# This policy uses the tfconfig/v2 import to restrict providers to those
+# in an allowed list created from code above.
+
+# It used to only use the providers collection of the tfconfig/v2 import, but
+# that did not process resources and data sources from allowed providers
+# when no provider block was included in the Terraform configuration. So, it now
+# also explicitly allows resources and data sources from allowed providers using
+# the resources collection of the tfconfig/v2 import.
+
+# List of allowed providers
+#allowed_list = ["aws", "local", "null", "random", "terraform", "tfe"]
+
+# Get all providers
+allProviders = config.find_all_providers()
+
+# Filter to providers with violations
+# Warnings will not be printed for violations since the last parameter is false
+violatingProviders = config.filter_attribute_not_in_list(allProviders,
+	"name", allowed_list, false)
+
+# Print any violations
+prohibitedProvidersCount = length(violatingProviders["messages"])
+if prohibitedProvidersCount > 0 {
+	config.print_violations(violatingProviders["messages"], "Provider")
+}
+
+# Initialize resource and data source counts
+prohibitedResourcesCount = 0
+prohibitedDataSourcesCount = 0
+
+# Find all resources
+allResources = config.find_all_resources()
+
+# Filter to disallowed resources
+prohibitedResources = filter allResources as address, r {
+	strings.split(r.type, "_")[0] not in allowed_list
+}
+
+# Print violations and increment counts for resources
+if length(prohibitedResources) > 0 {
+	print("Resources from providers are not allowed unless they are in", allowed_list)
+	prohibitedResourcesCount += length(prohibitedResources)
+	for prohibitedResources as address, r {
+		print("Resource", address, "from provider", strings.split(r.type, "_")[0],
+			"is not allowed.")
+	} // end for prohibitedResources
+} // end if
+
+# Find all data sources
+allDataSources = config.find_all_datasources()
+
+# Filter to disallowed data sources
+prohibitedDataSources = filter allDataSources as address, r {
+	strings.split(r.type, "_")[0] not in allowed_list
+}
+
+# Print violations and increment counts for data sources
+if length(prohibitedDataSources) > 0 {
+	print("Data sources from providers are not allowed unless they are in", allowed_list)
+	prohibitedDataSourcesCount += length(prohibitedDataSources)
+	for prohibitedDataSources as address, r {
+		print("Data source", address, "from provider", strings.split(r.type, "_")[0],
+			"is not allowed.")
+	} // end for prohibitedDataSources
+} // end if
+
+#############################################
+
+# Combines all violation typeos
+violations = prohibitedProvidersCount + prohibitedResourcesCount + prohibitedDataSourcesCount
+# Control 1.2.4 - Checks Terraform Private Registry for list of Authorized Providers
+main = rule {
+	violations is 0
+}
