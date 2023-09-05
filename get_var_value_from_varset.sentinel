@@ -1,0 +1,55 @@
+# Policy returns the Variable Set Variables & Values and does a comparasion
+// https://developer.hashicorp.com/terraform/cloud-docs/api-docs/variable-sets#list-variables-in-a-variable-set
+// This policy is written because Variable Set Data does not appear in Mock Files
+
+
+### Import functions ###
+import "tfrun"
+import "http"
+import "json"
+
+### Input Parameters ###
+param api_key default "notthistime!" //TFC Org Token
+param varset default "getyourownid" // Get this running a GET Here: https://app.terraform.io/api/v2/organizations/[org-name]]/varsets
+
+
+##Declare a function to get the value from a varset
+////////////////////////////////////////////////////////
+get_var_value_from_varset = func(varset, varname){
+### Run Time Variables ###
+workspace_name = tfrun.workspace.name
+organization = tfrun.organization.name
+
+### Variables from tfrun ###
+vars = tfrun.variables
+
+### Build GET Call ###
+request = http.request("https://app.terraform.io/api/v2/varsets/"+varset+"/relationships/vars/")
+request = request.with_header("Authorization", "Bearer "+api_key)
+request = request.with_header("Content-Type", "application/json")
+
+##  Create a variable from the GET response and unmarshal to use selectors on keys.  ##
+resp = json.unmarshal(http.get(request).body)
+res = resp.data
+#print(res)		
+#############################################
+test = filter res as _, resource_changes {
+    resource_changes.attributes.key is varname
+} 
+
+pair = [test[0].attributes.key, test[0].attributes.value]
+
+ return pair
+}
+/////////////////////////////////////////////////////
+
+
+## Declare a variable using the function above passing varsetID and variable name.
+a = get_var_value_from_varset(varset, "testmax")
+print(a)
+
+
+# Policy leveraging TFC API to Pull in Variable Set Data
+main = rule {
+  true
+}
